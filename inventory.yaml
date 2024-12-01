@@ -1,0 +1,12 @@
+all:
+  children:
+    controller:
+      hosts:
+        controller1:
+          ansible_host: 192.168.31.185
+          ansible_user: vboxuser
+    compute:
+      hosts:
+        compute1:
+          ansible_host: 192.168.31.75
+          ansible_user: vboxuser

@@ -1,0 +1,178 @@
+---
+- name: Configure NTP
+  hosts: all
+  become: true
+  tasks:
+    - name: Install NTP on Ubuntu
+      apt:
+        name: ntp
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Install NTP on CentOS
+      yum:
+        name: chrony
+        state: present
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Start and enable NTP service
+      service:
+        name: "{{ 'ntp' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
+        state: started
+        enabled: true
+
+- name: Install OpenStack packages
+  hosts: all
+  become: true
+  tasks:
+    - name: Add OpenStack repository on CentOS
+      shell: |
+        yum install -y centos-release-openstack
+        yum config-manager --enable centos-openstack-wallaby
+        yum update -y
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Install OpenStack repository on Ubuntu
+      shell: |
+        add-apt-repository cloud-archive:wallaby -y
+        apt-get update
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Install common OpenStack packages
+      package:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - python3-openstackclient
+        - python3-pip
+        - mariadb-server
+        - memcached
+
+- name: Configure SQL Database
+  hosts: all
+  become: true
+  tasks:
+    - name: Install MariaDB on Ubuntu
+      apt:
+        name: mariadb-server
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Install MariaDB on CentOS
+      yum:
+        name: mariadb-server
+        state: present
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Configure MariaDB for OpenStack on Ubuntu
+      copy:
+        dest: /etc/mysql/conf.d/openstack.cnf
+        content: |
+          [mysqld]
+          bind-address = 0.0.0.0
+          default-storage-engine = innodb
+          innodb_file_per_table = on
+          max_connections = 4096
+          collation-server = utf8_general_ci
+          character-set-server = utf8
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Configure MariaDB for OpenStack on CentOS
+      copy:
+        dest: /etc/my.cnf.d/openstack.cnf
+        content: |
+          [mysqld]
+          bind-address = 0.0.0.0
+          default-storage-engine = innodb
+          innodb_file_per_table = on
+          max_connections = 4096
+          collation-server = utf8_general_ci
+          character-set-server = utf8
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Restart MariaDB service
+      service:
+        name: "{{ 'mysql' if ansible_facts['os_family'] == 'Debian' else 'mariadb' }}"
+        state: restarted
+
+- name: Configure Memcached
+  hosts: all
+  become: true
+  tasks:
+    - name: Install Memcached
+      package:
+        name: memcached
+        state: present
+
+    - name: Start and enable Memcached service
+      service:
+        name: memcached
+        state: started
+        enabled: true
+
+- name: Install etcd
+  hosts: all
+  become: true
+  tasks:
+    - name: Create etcd user and group
+      user:
+        name: etcd
+        system: yes
+        create_home: no
+        shell: /sbin/nologin
+
+    - name: Create etcd data directory
+      file:
+        path: /var/lib/etcd
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: "0755"
+
+    - name: Install etcd from package (Ubuntu only)
+      apt:
+        name: etcd
+        state: present
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Download etcd binary from GitHub (CentOS only)
+      get_url:
+        url: "https://github.com/etcd-io/etcd/releases/download/v3.5.9/etcd-v3.5.9-linux-amd64.tar.gz"
+        dest: /tmp/etcd-v3.5.9-linux-amd64.tar.gz
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Extract etcd binary (CentOS only)
+      unarchive:
+        src: /tmp/etcd-v3.5.9-linux-amd64.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Create etcd systemd service file
+      copy:
+        dest: /etc/systemd/system/etcd.service
+        content: |
+          [Unit]
+          Description=etcd key-value store
+          Documentation=https://etcd.io
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/local/bin/etcd --data-dir=/var/lib/etcd
+          Restart=always
+          RestartSec=5s
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      when: ansible_facts['os_family'] == 'Debian' or ansible_facts['os_family'] == 'RedHat'
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload
+
+    - name: Enable and start etcd service
+      service:
+        name: etcd
+        state: started
+        enabled: true
+
